@@ -1,0 +1,111 @@
+@import "tailwindcss";
+
+@theme {
+  --color-kenya-black: #0b1118;
+  --color-kenya-red: #CE1126;
+  --color-kenya-red-dark: #A50F20;
+  --color-kenya-green: #138A35;
+  --color-kenya-green-dark: #0F6F2C;
+  --color-kenya-white: #F7F7F7;
+  --color-kenya-gray: #EBF3F5;
+  --color-kenya-slate: #E3EEF0;
+  --color-kenya-border: #CEDCE2;
+
+  --font-family-jakarta: 'Plus Jakarta Sans', system-ui, -apple-system, sans-serif;
+}
+
+@media (prefers-color-scheme: dark) {
+  :root {
+    --color-kenya-black: #030a12;
+    --color-kenya-red: #ef4444;
+    --color-kenya-red-dark: #dc2626;
+    --color-kenya-green: #22c55e;
+    --color-kenya-green-dark: #16a34a;
+    --color-kenya-white: #1e293b;
+    --color-kenya-gray: #f4fafa;
+    --color-kenya-slate: #1e293b;
+    --color-kenya-border: #334155;
+  }
+}
+
+[data-theme="dark"] {
+  --color-kenya-black: #f1f5f9;
+  --color-kenya-red: #ef4444;
+  --color-kenya-red-dark: #dc2626;
+  --color-kenya-green: #22c55e;
+  --color-kenya-green-dark: #16a34a;
+  --color-kenya-white: #f6f7fa;
+  --color-kenya-gray: #f2f3f7af;
+  --color-kenya-slate: rgb(249, 252, 252);
+  --color-kenya-border: #334155;
+}
+
+html {
+  height: 100%;
+  width: 100%;
+}
+
+body {
+  margin: 0;
+  font-family: var(--font-family-jakarta);
+  background-color: var(--color-kenya-gray);
+  color: var(--color-kenya-black);
+  -webkit-font-smoothing: antialiased;
+  -moz-osx-font-smoothing: grayscale;
+}
+
+#root {
+  min-height: 100vh;
+  display: flex;
+  flex-direction: column;
+}
+
+@keyframes fade-in-up {
+  from {
+    opacity: 0;
+    transform: translateY(1.5rem);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
+
+.animate-fade-in-up {
+  animation: fade-in-up 0.8s ease-out forwards;
+}
+
+@keyframes shimmer {
+  0% {
+    transform: translateX(-100%) skewX(-12deg);
+  }
+  100% {
+    transform: translateX(200%) skewX(-12deg);
+  }
+}
+
+.shimmer-effect::after {
+  content: '';
+  position: absolute;
+  inset: 0;
+  background: linear-gradient(90deg, transparent, rgba(255,255,255,0.25), transparent);
+  transform: translateX(-100%) skewX(-12deg);
+  transition: transform 800ms;
+}
+
+.group:hover .shimmer-effect::after {
+  transform: translateX(200%) skewX(-12deg);
+}
+
+.hero-overlay {
+  background: linear-gradient(45deg, rgba(206, 17, 38, 0.5) 0%, rgba(11, 17, 24, 0.7) 50%, rgba(19, 138, 53, 0.4) 100%);
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .animate-fade-in-up {
+    animation: none;
+  }
+  .shimmer-effect::after {
+    transition: none;
+  }
+}
