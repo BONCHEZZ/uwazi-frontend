@@ -148,13 +148,17 @@ async function refreshAccessToken(): Promise<string | null> {
   if (!refreshToken) return null
 
   if (!refreshPromise) {
+    const bytes = new TextEncoder().encode(JSON.stringify({ refreshToken }))
+    let binary = ''
+    for (const byte of bytes) binary += String.fromCharCode(byte)
     refreshPromise = fetch(`${API_BASE_URL}/auth/refresh`, {
       method: 'POST',
       headers: {
-        'Content-Type': 'application/json',
+        'Content-Type': 'text/plain;charset=utf-8',
+        'X-Uwazi-Body': 'base64-json',
         'x-uwazi-interface': INTERFACE_HEADER,
       },
-      body: JSON.stringify({ refreshToken }),
+      body: btoa(binary),
     })
       .then(async (response) => {
         if (!response.ok) {
@@ -177,14 +181,29 @@ async function refreshAccessToken(): Promise<string | null> {
 async function request<T>(path: string, options: RequestInit = {}, retry = true): Promise<T> {
   const headers = new Headers(options.headers)
   headers.set('x-uwazi-interface', INTERFACE_HEADER)
-  if (options.body && !(options.body instanceof FormData) && !headers.has('Content-Type')) {
-    headers.set('Content-Type', 'application/json')
+
+  // Never send JSON-shaped bytes over the wire: the Vercel node runtime strips
+  // double quotes from JSON request bodies (lossy). Send base64 JSON as plain
+  // text instead; the backend reader decodes it.
+  let body = options.body
+  if (
+    body &&
+    !(body instanceof FormData) &&
+    !(typeof Blob !== 'undefined' && body instanceof Blob)
+  ) {
+    const json = typeof body === 'string' ? body : JSON.stringify(body)
+    const bytes = new TextEncoder().encode(json)
+    let binary = ''
+    for (const byte of bytes) binary += String.fromCharCode(byte)
+    headers.set('Content-Type', 'text/plain;charset=utf-8')
+    headers.set('X-Uwazi-Body', 'base64-json')
+    body = btoa(binary)
   }
 
   const accessToken = readToken(ACCESS_TOKEN_KEY)
   if (accessToken) headers.set('Authorization', `Bearer ${accessToken}`)
 
-  const response = await fetch(`${API_BASE_URL}${path}`, { ...options, headers })
+  const response = await fetch(`${API_BASE_URL}${path}`, { ...options, body, headers })
 
   if (response.status === 401 && retry && !path.startsWith('/auth/')) {
     const newToken = await refreshAccessToken()
