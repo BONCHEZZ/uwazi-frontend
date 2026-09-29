@@ -442,6 +442,19 @@ async function searchProjects(filters: Record<string, unknown> = {}): Promise<Pr
   const params = searchParams(filters)
   const data = await request<SearchData>(`/search?${params.toString()}`)
   let projects = extractSearchItems(data).map(mapProject).filter((project) => Boolean(project.id))
+
+  // Public county budget feed. One "project" per county (the OCOB CBIRR
+  // 'Total' classification record) is merged into the unfiltered dashboard
+  // surface so the county dropdown, stat cards and budget charts reflect the
+  // real approved vs actual expenditure of every county. Text searches and
+  // status-filtered feeds (e.g. featured / construction) stay on their own
+  // entity set.
+  const showCountyBudgets = !filters.search && !filters.status
+  if (showCountyBudgets) {
+    const existing = new Set(projects.map((p) => p.id))
+    const merged = (await loadCountyBudgetProjects()).filter((p) => !existing.has(p.id))
+    projects = [...projects, ...merged]
+  }
   const minCompletion = filters.minCompletion === undefined ? undefined : toNumber(filters.minCompletion)
   const maxCompletion = filters.maxCompletion === undefined ? undefined : toNumber(filters.maxCompletion)
   const contractor = filters.contractor ? String(filters.contractor).split(',').filter(Boolean) : []
@@ -458,6 +471,104 @@ async function findEntityById(id: string): Promise<SearchResult | undefined> {
     const source = unwrapSearchRecord(item)
     return toStringValue(pick(source, ['id', 'entityId', 'recordId'])) === id || item.entityId === id || item.id === id
   }) ?? extractSearchItems(data)[0]
+}
+
+function mapCountyBudgetRecord(item: unknown, index: number): CountyBudgetRecord {
+  const record = asRecord(item)
+  const sourcePayload = asRecord(record.sourcePayload)
+  return {
+    id: toStringValue(record.id, `budget-record-${index}`),
+    externalId: toStringValue(record.externalId),
+    county: toStringValue(sourcePayload.county, 'Unknown county'),
+    fiscalYear: toStringValue(sourcePayload.fiscalYear),
+    period: toStringValue(sourcePayload.period),
+    classification: toStringValue(sourcePayload.classification, 'Unclassified'),
+    isTotal: sourcePayload.isTotal === true,
+    approvedBudgetAssembly: toNullableNumber(sourcePayload.approvedBudgetAssembly),
+    approvedBudgetExecutive: toNullableNumber(sourcePayload.approvedBudgetExecutive),
+    expenditureAssembly: toNullableNumber(sourcePayload.expenditureAssembly),
+    expenditureExecutive: toNullableNumber(sourcePayload.expenditureExecutive),
+    absorptionAssembly: toNullableNumber(sourcePayload.absorptionAssembly),
+    absorptionExecutive: toNullableNumber(sourcePayload.absorptionExecutive),
+  }
+}
+
+let countyBudgetCache: CountyBudgetRecord[] | null = null
+
+async function fetchCountyBudgetRecords(): Promise<CountyBudgetRecord[]> {
+  // The public source-records route caps pageSize at 1000; a single page
+  // covers the full CBIRR export, but keep the loop safe if the export ever
+  // grows beyond one page.
+  const pageSize = 1000
+  const all: CountyBudgetRecord[] = []
+  let pageNumber = 1
+  for (;;) {
+    const params = new URLSearchParams({ page: String(pageNumber), pageSize: String(pageSize) })
+    const response = await request<{
+      items?: unknown[]
+      total?: number
+      pagination?: { total?: number; totalPages?: number }
+    }>(`/public/sources/${COUNTY_BUDGET_SOURCE_ID}/records?${params.toString()}`)
+    const items = normaliseArray(response.items).map(mapCountyBudgetRecord)
+    all.push(...items)
+    const total = toNumber(response.total, toNumber(asRecord(response.pagination).total))
+    const totalPages = toNumber(asRecord(response.pagination).totalPages, Math.ceil((total || all.length + 1) / pageSize))
+    if (items.length === 0 || pageNumber >= totalPages || (total > 0 && all.length >= total)) break
+    pageNumber += 1
+  }
+  return all
+}
+
+async function loadCountyBudgetRecords(): Promise<CountyBudgetRecord[]> {
+  if (countyBudgetCache) return countyBudgetCache
+  countyBudgetCache = await fetchCountyBudgetRecords()
+  return countyBudgetCache
+}
+
+function countyBudgetProject(record: CountyBudgetRecord, index: number): Project {
+  const budget = record.approvedBudgetExecutive ?? 0
+  const expenditure = record.expenditureExecutive ?? 0
+  const county = record.county === 'Unknown county' ? '' : record.county
+  return {
+    id: record.externalId || record.id || `county-budget-${index}`,
+    title: county ? `${county} County Budget` : 'County Budget',
+    description: `${record.fiscalYear} ${record.period} budget implementation summary for ${county || 'the county'}`,
+    code: record.externalId || record.id,
+    category: 'County Budget',
+    status: 'planning',
+    county,
+    constituency: '',
+    ward: '',
+    gps: { lat: 0, lng: 0 },
+    budget,
+    treasuryAllocation: budget,
+    treasuryDisbursement: expenditure,
+    expenditure,
+    remainingBalance: Math.max(0, budget - expenditure),
+    fundingSource: 'County Government Budget',
+    implementingMinistry: county ? `${county} County Government` : '',
+    contractorId: '',
+    consultant: '',
+    projectEngineer: '',
+    startDate: new Date().toISOString(),
+    expectedCompletion: new Date().toISOString(),
+    progress: Math.min(100, Math.max(0, record.absorptionExecutive ?? 0)),
+    verificationScore: 0,
+    riskLevel: 'low',
+    images: [],
+    videos: [],
+    documents: [],
+    milestones: [],
+    disbursements: [],
+    comments: [],
+    communityUploads: [],
+    officialUpdates: [],
+  }
+}
+
+async function loadCountyBudgetProjects(): Promise<Project[]> {
+  const records = await loadCountyBudgetRecords()
+  return records.filter((record) => record.isTotal).map(countyBudgetProject)
 }
 
 export const api = {
@@ -597,29 +708,20 @@ export const api = {
     }>(`/public/sources/${COUNTY_BUDGET_SOURCE_ID}/records?${params.toString()}`)
 
     return {
-      items: normaliseArray(response.items).map((item, index) => {
-        const record = asRecord(item)
-        const sourcePayload = asRecord(record.sourcePayload)
-        return {
-          id: toStringValue(record.id, `budget-record-${index}`),
-          externalId: toStringValue(record.externalId),
-          county: toStringValue(sourcePayload.county, 'Unknown county'),
-          fiscalYear: toStringValue(sourcePayload.fiscalYear),
-          period: toStringValue(sourcePayload.period),
-          classification: toStringValue(sourcePayload.classification, 'Unclassified'),
-          isTotal: sourcePayload.isTotal === true,
-          approvedBudgetAssembly: toNullableNumber(sourcePayload.approvedBudgetAssembly),
-          approvedBudgetExecutive: toNullableNumber(sourcePayload.approvedBudgetExecutive),
-          expenditureAssembly: toNullableNumber(sourcePayload.expenditureAssembly),
-          expenditureExecutive: toNullableNumber(sourcePayload.expenditureExecutive),
-          absorptionAssembly: toNullableNumber(sourcePayload.absorptionAssembly),
-          absorptionExecutive: toNullableNumber(sourcePayload.absorptionExecutive),
-        }
-      }),
+      items: normaliseArray(response.items).map(mapCountyBudgetRecord),
       total: toNumber(response.total),
       page: toNumber(response.page, page),
       pageSize: toNumber(response.pageSize, pageSize),
     }
+  },
+
+  async getAllCountyBudgetRecords(): Promise<CountyBudgetRecord[]> {
+    const records = await loadCountyBudgetRecords()
+    return [...records].sort((a, b) => {
+      const byCounty = a.county.localeCompare(b.county)
+      if (byCounty !== 0) return byCounty
+      return a.classification.localeCompare(b.classification)
+    })
   },
 
   async getRiskIndicators(): Promise<Array<{ id: string; project: string; level: 'low' | 'medium' | 'high'; score: number; category: string; description: string }>> {

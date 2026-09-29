@@ -52,10 +52,31 @@ function FinancialTransparency() {
     queryFn: () => api.getProjects(),
   })
 
-  const { data: countyBudgetData, isPending: isCountyBudgetPending, isError: isCountyBudgetError } = useQuery({
-    queryKey: ["countyBudgetRecords", budgetPage],
-    queryFn: () => api.getCountyBudgetRecords(budgetPage, 20),
+  const {
+    data: allCountyBudgetRecords = [],
+    isPending: isCountyBudgetPending,
+    isError: isCountyBudgetError,
+  } = useQuery({
+    queryKey: ["countyBudgetRecords", "all"],
+    queryFn: () => api.getAllCountyBudgetRecords(),
   })
+
+  // The CBIRR export is small enough to paginate in the browser; every page
+  // spans counties rather than being clipped to the tail of the export.
+  const BUDGET_PAGE_SIZE = 20
+  const tableRows = useMemo(() => {
+    const rows = selectedCounty === "all"
+      ? allCountyBudgetRecords
+      : allCountyBudgetRecords.filter((record) => record.county === selectedCounty)
+    return rows
+  }, [allCountyBudgetRecords, selectedCounty])
+
+  const totalTablePages = Math.max(1, Math.ceil(tableRows.length / BUDGET_PAGE_SIZE))
+  const safeBudgetPage = Math.min(budgetPage, totalTablePages)
+  const visibleRows = tableRows.slice(
+    (safeBudgetPage - 1) * BUDGET_PAGE_SIZE,
+    safeBudgetPage * BUDGET_PAGE_SIZE,
+  )
 
   const filtered = useMemo(() => {
     return allProjects.filter((p) => {
@@ -262,7 +283,7 @@ function FinancialTransparency() {
                         </tr>
                       </thead>
                       <tbody>
-                        {countyBudgetData?.items.map((record) => (
+                        {visibleRows.map((record) => (
                           <tr key={record.id} className="border-b last:border-0">
                             <td className="px-2 py-2 font-medium">{record.county}</td>
                             <td className="px-2 py-2">{record.fiscalYear} {record.period}</td>
@@ -278,22 +299,29 @@ function FinancialTransparency() {
                             </td>
                           </tr>
                         ))}
+                        {visibleRows.length === 0 && (
+                          <tr>
+                            <td colSpan={8} className="px-2 py-6 text-center text-kenya-black/60">
+                              No county budget records match the current filters.
+                            </td>
+                          </tr>
+                        )}
                       </tbody>
                     </table>
                   </div>
                   <div className="mt-4 flex items-center justify-between gap-3">
                     <p className="text-xs text-kenya-black/60">
-                      Page {countyBudgetData?.page ?? budgetPage} of {Math.max(1, Math.ceil((countyBudgetData?.total ?? 0) / (countyBudgetData?.pageSize ?? 20)))}
-                      {countyBudgetData ? ` · ${countyBudgetData.total} records` : ""}
+                      Page {safeBudgetPage} of {totalTablePages}
+                      {tableRows.length > 0 ? ` · ${tableRows.length} records` : ""}
                     </p>
                     <div className="flex gap-2">
-                      <Button variant="outline" size="sm" disabled={budgetPage <= 1} onClick={() => setBudgetPage((page) => page - 1)}>
+                      <Button variant="outline" size="sm" disabled={safeBudgetPage <= 1} onClick={() => setBudgetPage((page) => page - 1)}>
                         Previous
                       </Button>
                       <Button
                         variant="outline"
                         size="sm"
-                        disabled={!countyBudgetData || budgetPage * countyBudgetData.pageSize >= countyBudgetData.total}
+                        disabled={safeBudgetPage >= totalTablePages}
                         onClick={() => setBudgetPage((page) => page + 1)}
                       >
                         Next
