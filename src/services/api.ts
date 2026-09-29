@@ -525,50 +525,111 @@ async function loadCountyBudgetRecords(): Promise<CountyBudgetRecord[]> {
   return countyBudgetCache
 }
 
-function countyBudgetProject(record: CountyBudgetRecord, index: number): Project {
-  const budget = record.approvedBudgetExecutive ?? 0
-  const expenditure = record.expenditureExecutive ?? 0
-  const county = record.county === 'Unknown county' ? '' : record.county
-  return {
-    id: record.externalId || record.id || `county-budget-${index}`,
-    title: county ? `${county} County Budget` : 'County Budget',
-    description: `${record.fiscalYear} ${record.period} budget implementation summary for ${county || 'the county'}`,
-    code: record.externalId || record.id,
-    category: 'County Budget',
-    status: 'planning',
-    county,
-    constituency: '',
-    ward: '',
-    gps: { lat: 0, lng: 0 },
-    budget,
-    treasuryAllocation: budget,
-    treasuryDisbursement: expenditure,
-    expenditure,
-    remainingBalance: Math.max(0, budget - expenditure),
-    fundingSource: 'County Government Budget',
-    implementingMinistry: county ? `${county} County Government` : '',
-    contractorId: '',
-    consultant: '',
-    projectEngineer: '',
-    startDate: new Date().toISOString(),
-    expectedCompletion: new Date().toISOString(),
-    progress: Math.min(100, Math.max(0, record.absorptionExecutive ?? 0)),
-    verificationScore: 0,
-    riskLevel: 'low',
-    images: [],
-    videos: [],
-    documents: [],
-    milestones: [],
-    disbursements: [],
-    comments: [],
-    communityUploads: [],
-    officialUpdates: [],
+function sumExecutive(rows: CountyBudgetRecord[], field: 'approvedBudgetExecutive' | 'expenditureExecutive'): number {
+  return rows.reduce((sum, row) => sum + (row[field] ?? 0), 0)
+}
+
+interface CountyBudgetSummary {
+  county: string
+  budget: number
+  expenditure: number
+  fiscalYear: string
+  period: string
+  externalId: string
+}
+
+function countyFeedSummaries(records: CountyBudgetRecord[]): CountyBudgetSummary[] {
+  const byCounty = new Map<string, CountyBudgetRecord[]>()
+  for (const record of records) {
+    const list = byCounty.get(record.county) ?? []
+    list.push(record)
+    byCounty.set(record.county, list)
   }
+
+  const summaries: CountyBudgetSummary[] = []
+  for (const [county, rows] of byCounty) {
+    const fiscalYear = rows.find((row) => row.fiscalYear)?.fiscalYear ?? ''
+    const period = rows.find((row) => row.period)?.period ?? ''
+    const totalRows = rows.filter((row) => row.isTotal)
+
+    // Authoritative 'Total' row when it carries numeric executive figures
+    // (prefer the largest, i.e. the report's full total when several exist).
+    const populatedTotals = totalRows
+      .filter((row) => (row.approvedBudgetExecutive ?? 0) > 0)
+      .sort((a, b) => (b.approvedBudgetExecutive ?? 0) - (a.approvedBudgetExecutive ?? 0))
+    const bestTotal = populatedTotals[0] ?? totalRows[0]
+
+    let budget = bestTotal?.approvedBudgetExecutive ?? 0
+    let expenditure = bestTotal?.expenditureExecutive ?? 0
+
+    // Some reports omit the Total line or leave its executive figures blank;
+    // the CBIRR split is Total = Total Recurrent + Development.
+    if (budget <= 0) {
+      const recurrent = rows.filter((row) =>
+        row.classification === 'Total Recurrent Expenditure' || row.classification === 'Recurrent',
+      )
+      const development = rows.filter((row) =>
+        row.classification === 'Development Expenditure' || row.classification === 'Development',
+      )
+      budget = sumExecutive(recurrent, 'approvedBudgetExecutive') + sumExecutive(development, 'approvedBudgetExecutive')
+      expenditure = sumExecutive(recurrent, 'expenditureExecutive') + sumExecutive(development, 'expenditureExecutive')
+    }
+
+    summaries.push({
+      county,
+      budget,
+      expenditure,
+      fiscalYear,
+      period,
+      externalId: bestTotal?.externalId ?? county,
+    })
+  }
+  return summaries
 }
 
 async function loadCountyBudgetProjects(): Promise<Project[]> {
   const records = await loadCountyBudgetRecords()
-  return records.filter((record) => record.isTotal).map(countyBudgetProject)
+  return countyFeedSummaries(records).map((summary, index) => {
+    const { county, budget, expenditure } = summary
+    const absorption = budget > 0
+      ? Math.min(100, Math.max(0, Math.round((expenditure / budget) * 100)))
+      : 0
+    return {
+      id: summary.externalId || `county-budget-${index}`,
+      title: county ? `${county} County Budget` : 'County Budget',
+      description: `${summary.fiscalYear} ${summary.period} budget implementation summary for ${county || 'the county'}`,
+      code: summary.externalId,
+      category: 'County Budget',
+      status: 'planning',
+      county,
+      constituency: '',
+      ward: '',
+      gps: { lat: 0, lng: 0 },
+      budget,
+      treasuryAllocation: budget,
+      treasuryDisbursement: expenditure,
+      expenditure,
+      remainingBalance: Math.max(0, budget - expenditure),
+      fundingSource: 'County Government Budget',
+      implementingMinistry: county ? `${county} County Government` : '',
+      contractorId: '',
+      consultant: '',
+      projectEngineer: '',
+      startDate: new Date().toISOString(),
+      expectedCompletion: new Date().toISOString(),
+      progress: absorption,
+      verificationScore: 0,
+      riskLevel: 'low',
+      images: [],
+      videos: [],
+      documents: [],
+      milestones: [],
+      disbursements: [],
+      comments: [],
+      communityUploads: [],
+      officialUpdates: [],
+    }
+  })
 }
 
 export const api = {
